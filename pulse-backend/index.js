@@ -1,4 +1,6 @@
 const express = require("express");
+const cookieParser = require("cookie-parser");
+const cors = require("cors");
 const { WorkOS } = require("@workos-inc/node");
 
 const CLIENT_ID = "client_01KA32XKNNQ65WTEB00XYTZG8W";
@@ -7,6 +9,19 @@ const API_KEY =
 const WORKOS_COOKIE_PASSWORD = "1Oj0cO7NKnEDom664iXm8IvGWqWbAm4T";
 
 const app = express();
+
+// CORS configuration
+app.use(
+  cors({
+    origin: true, // Allow all origins
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+app.use(cookieParser());
+
 const workos = new WorkOS(API_KEY, {
   clientId: CLIENT_ID,
 });
