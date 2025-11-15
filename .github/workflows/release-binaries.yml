@@ -1,0 +1,84 @@
+name: Build and Release Binaries
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: pulse-cli/package-lock.json
+
+      - name: Install dependencies
+        working-directory: pulse-cli
+        run: npm ci
+
+      - name: Install pkg
+        working-directory: pulse-cli
+        run: npm install -g pkg
+
+      - name: Build binaries
+        working-directory: pulse-cli
+        run: npm run build:all
+
+      - name: List built files
+        working-directory: pulse-cli
+        run: ls -lh dist/
+
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-cli-linux
+          path: pulse-cli/dist/pulse-cli-linux
+
+      - name: Upload macOS binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-cli-macos
+          path: pulse-cli/dist/pulse-cli-macos
+
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-cli-windows
+          path: pulse-cli/dist/pulse-cli-win.exe
+
+      - name: Upload binaries to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            pulse-cli/dist/pulse-cli-linux
+            pulse-cli/dist/pulse-cli-macos
+            pulse-cli/dist/pulse-cli-win.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate checksums
+        if: github.event_name == 'release'
+        working-directory: pulse-cli/dist
+        run: |
+          sha256sum pulse-cli-linux > checksums.txt
+          sha256sum pulse-cli-macos >> checksums.txt
+          sha256sum pulse-cli-win.exe >> checksums.txt
+          cat checksums.txt
+
+      - name: Upload checksums
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: pulse-cli/dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

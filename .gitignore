@@ -41,6 +41,13 @@ dist/
 build/
 out/
 
+# CLI binaries (built by pkg)
+pulse-cli/dist/
+pulse-cli/bundle/
+pulse-cli-*.exe
+pulse-cli-linux
+pulse-cli-macos
+
 # Coverage
 coverage/
 *.lcov

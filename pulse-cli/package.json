@@ -1,5 +1,5 @@
 {
-  "name": "@yourusername/pulse-cli",
+  "name": "@grvsharma1810/pulse-cli",
   "version": "1.0.0",
   "description": "CLI tool for Pulse authentication and favorite color management with WorkOS",
   "main": "src/index.js",
@@ -8,7 +8,13 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "prepublishOnly": "echo 'Ready to publish'"
+    "prepublishOnly": "echo 'Ready to publish'",
+    "build": "node build.js",
+    "build:all": "node build.js",
+    "build:linux": "node build.js",
+    "build:macos": "node build.js",
+    "build:windows": "node build.js",
+    "clean": "rm -rf dist bundle"
   },
   "keywords": [
     "cli",
@@ -21,23 +27,41 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/pulse-cli.git"
+    "url": "https://github.com/grvsharma1810/pulse-cli.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/pulse-cli/issues"
+    "url": "https://github.com/grvsharma1810/pulse-cli/issues"
   },
-  "homepage": "https://github.com/yourusername/pulse-cli#readme",
+  "homepage": "https://github.com/grvsharma1810/pulse-cli#readme",
   "engines": {
     "node": ">=14.0.0"
   },
   "files": [
     "src/"
   ],
+  "pkg": {
+    "targets": [
+      "node18-linux-x64",
+      "node18-macos-x64",
+      "node18-win-x64"
+    ],
+    "outputPath": "dist",
+    "assets": [
+      "node_modules/axios/**/*",
+      "node_modules/chalk/**/*",
+      "node_modules/ora/**/*",
+      "node_modules/open/**/*"
+    ]
+  },
   "dependencies": {
     "axios": "^1.6.0",
     "chalk": "^4.1.2",
     "commander": "^12.0.0",
     "open": "^8.4.2",
     "ora": "^5.4.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.0",
+    "pkg": "^5.8.1"
   }
 }
