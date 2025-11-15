@@ -1,5 +1,5 @@
 import { useAuth, AuthKitProvider } from "@workos-inc/authkit-react";
-import React, { useEffect, useState, type JSX } from "react";
+import React, { type JSX } from "react";
 
 export function Auth() {
   const { isLoading, user, getAccessToken, signIn, signUp, signOut } =
@@ -73,7 +73,7 @@ export function Auth() {
   );
 }
 
-function AppV1(): JSX.Element {
+export function AppV1(): JSX.Element {
   const clientId = import.meta.env.VITE_WORKOS_CLIENT_ID;
 
   if (!clientId) {
