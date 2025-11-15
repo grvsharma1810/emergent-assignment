@@ -1,13 +1,16 @@
+require("dotenv/config");
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const { WorkOS } = require("@workos-inc/node");
+const { PrismaClient } = require("./generated/prisma");
 
 const CLIENT_ID = "client_01KA32XKNNQ65WTEB00XYTZG8W";
 const API_KEY =
   "sk_test_a2V5XzAxS0EzMlhLMUFTSFlOMjRTRVA4Wlk2OE04LHhLMG9IckdzZ1FHUFlyQVdPemF1ZHBOODM";
 const WORKOS_COOKIE_PASSWORD = "1Oj0cO7NKnEDom664iXm8IvGWqWbAm4T";
 
+const prisma = new PrismaClient();
 const app = express();
 
 // CORS configuration
@@ -156,6 +159,79 @@ app.get("/user", withAuth, async (req, res) => {
   // ... render dashboard page
 
   res.json({ user });
+});
+
+// GET favorite color - authenticated endpoint
+app.get("/favorite-color", withAuth, async (req, res) => {
+  try {
+    const session = workos.userManagement.loadSealedSession({
+      sessionData: req.cookies["wos-session"],
+      cookiePassword: WORKOS_COOKIE_PASSWORD,
+    });
+
+    const { user } = await session.authenticate();
+
+    // Find or create user in database
+    let dbUser = await prisma.user.findUnique({
+      where: { workosId: user.id },
+    });
+
+    if (!dbUser) {
+      // Create user if doesn't exist
+      dbUser = await prisma.user.create({
+        data: {
+          workosId: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+        },
+      });
+    }
+
+    res.json({ favoriteColor: dbUser.favoriteColor });
+  } catch (error) {
+    console.error("[/favorite-color GET] Error:", error);
+    res.status(500).json({ error: "Failed to fetch favorite color" });
+  }
+});
+
+// POST favorite color - authenticated endpoint
+app.post("/favorite-color", withAuth, express.json(), async (req, res) => {
+  try {
+    const session = workos.userManagement.loadSealedSession({
+      sessionData: req.cookies["wos-session"],
+      cookiePassword: WORKOS_COOKIE_PASSWORD,
+    });
+
+    const { user } = await session.authenticate();
+    const { favoriteColor } = req.body;
+
+    if (!favoriteColor || typeof favoriteColor !== "string") {
+      return res.status(400).json({ error: "favoriteColor is required" });
+    }
+
+    // Upsert user with favorite color
+    const dbUser = await prisma.user.upsert({
+      where: { workosId: user.id },
+      update: {
+        favoriteColor,
+        firstName: user.firstName,
+        lastName: user.lastName,
+      },
+      create: {
+        workosId: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        favoriteColor,
+      },
+    });
+
+    res.json({ favoriteColor: dbUser.favoriteColor });
+  } catch (error) {
+    console.error("[/favorite-color POST] Error:", error);
+    res.status(500).json({ error: "Failed to update favorite color" });
+  }
 });
 
 app.get("/health", (req, res) => {
