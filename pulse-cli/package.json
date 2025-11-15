@@ -1,0 +1,26 @@
+{
+  "name": "pulse-cli",
+  "version": "1.0.0",
+  "description": "CLI tool for Pulse authentication and favorite color management",
+  "main": "src/index.js",
+  "bin": {
+    "pulse": "./src/index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "cli",
+    "auth",
+    "workos"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "chalk": "^4.1.2",
+    "commander": "^12.0.0",
+    "open": "^8.4.2",
+    "ora": "^5.4.1"
+  }
+}
