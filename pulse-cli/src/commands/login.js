@@ -1,86 +1,99 @@
-const open = require('open');
-const chalk = require('chalk');
-const ora = require('ora');
-const { initiateDeviceAuth, pollForToken } = require('../api');
-const { saveSessionToken } = require('../config');
+const open = require("open");
+const chalk = require("chalk");
+const ora = require("ora");
+const readline = require("readline");
+const {
+  initiateDeviceAuth,
+  pollForToken,
+  exchangeForSession,
+} = require("../api");
+const { saveSessionToken } = require("../config");
 
 async function loginCommand() {
-  console.log(chalk.blue('\n🔐 Pulse CLI Login\n'));
+  console.log(chalk.blue("\n🔐 Pulse CLI Login\n"));
 
-  const spinner = ora('Initiating authentication...').start();
+  const spinner = ora("Initiating authentication...").start();
 
   try {
-    // Step 1: Initiate device authorization
+    // Step 1: Initiate device authorization with WorkOS
     const authData = await initiateDeviceAuth();
     spinner.stop();
 
     // Step 2: Display user code and verification URL
-    console.log(chalk.green('✓ Authentication initiated\n'));
-    console.log(chalk.bold('Please complete authentication in your browser:\n'));
+    console.log(chalk.green("✓ Authentication initiated\n"));
+    console.log(
+      chalk.bold("Please complete authentication in your browser:\n")
+    );
     console.log(chalk.cyan(`  Verification URL: ${authData.verificationUrl}`));
-    console.log(chalk.yellow(`  User Code: ${chalk.bold(authData.userCode)}\n`));
-    console.log(chalk.dim('Opening browser...'));
+    console.log(
+      chalk.yellow(`  User Code: ${chalk.bold(authData.userCode)}\n`)
+    );
 
-    // Open browser
-    await open(authData.verificationUrl);
+    // Wait for user to press Enter
+    console.log(
+      chalk.dim("Press <ENTER> to open the verification URL in your browser.")
+    );
+    await waitForEnter();
 
-    // Step 3: Poll for completion
-    console.log(chalk.dim('\nWaiting for authentication...'));
-    const pollSpinner = ora('Checking authorization status...').start();
-
-    let attempts = 0;
-    const maxAttempts = 60; // 5 minutes with 5-second intervals
-    let token = null;
-    let expiresAt = null;
-
-    while (attempts < maxAttempts) {
-      await sleep(5000); // Wait 5 seconds between polls
-
-      try {
-        const result = await pollForToken(authData.deviceCode);
-
-        if (result.pending) {
-          attempts++;
-          continue;
-        }
-
-        if (result.token) {
-          token = result.token;
-          expiresAt = result.expiresAt;
-          break;
-        }
-      } catch (error) {
-        pollSpinner.fail(chalk.red('Authentication failed'));
-        console.error(chalk.red(`Error: ${error.message}`));
-        process.exit(1);
-      }
+    // Try to open browser with complete verification URL
+    try {
+      console.log(chalk.dim("Opening browser..."));
+      await open(authData.verificationUrlComplete);
+    } catch (error) {
+      // Browser opening failed - that's okay, user can manually open the URL
+      console.log(chalk.dim("Could not open browser automatically."));
+      console.log(chalk.dim("Please open the URL above manually.\n"));
     }
 
-    if (!token) {
-      pollSpinner.fail(chalk.red('Authentication timeout'));
-      console.error(
-        chalk.red('\nAuthentication timed out. Please try again.')
-      );
+    // Step 3: Poll for completion using WorkOS recommended approach
+    console.log(chalk.dim("\nWaiting for authentication..."));
+    const pollSpinner = ora("Checking authorization status...").start();
+
+    try {
+      const result = await pollForToken({
+        deviceCode: authData.deviceCode,
+        expiresIn: authData.expiresIn,
+        interval: authData.interval,
+      });
+
+      pollSpinner.text = "Exchanging tokens for session...";
+
+      // Step 4: Exchange refresh token for sealed session from backend
+      const sessionData = await exchangeForSession(result.refresh_token);
+
+      console.log(chalk.dim("\nSession Data:"), sessionData);
+
+      pollSpinner.succeed(chalk.green("Authentication successful!"));
+
+      // Step 5: Save sealed session token
+      saveSessionToken(sessionData.sessionToken);
+
+      console.log(chalk.green(`\n✓ Welcome ${sessionData.user.firstName}!`));
+      console.log(chalk.green("✓ You are now logged in to Pulse CLI\n"));
+    } catch (error) {
+      pollSpinner.fail(chalk.red("Authentication failed"));
+      console.error(chalk.red(`Error: ${error.message}`));
       process.exit(1);
     }
-
-    // Step 4: Save token with expiration
-    saveSessionToken(token, expiresAt);
-    pollSpinner.succeed(chalk.green('Authentication successful!'));
-
-    // Show expiration info
-    const daysUntilExpiry = Math.floor((expiresAt - Date.now()) / (24 * 60 * 60 * 1000));
-    console.log(chalk.green('\n✓ You are now logged in to Pulse CLI'));
-    // console.log(chalk.dim(`  Token expires in: ${daysUntilExpiry} days\n`));
   } catch (error) {
-    spinner.fail(chalk.red('Authentication failed'));
+    spinner.fail(chalk.red("Authentication failed"));
     console.error(chalk.red(`\nError: ${error.message}\n`));
     process.exit(1);
   }
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function waitForEnter() {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    rl.question("", () => {
+      rl.close();
+      resolve();
+    });
+  });
 }
 
 module.exports = loginCommand;

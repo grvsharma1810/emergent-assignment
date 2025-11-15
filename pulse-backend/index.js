@@ -17,9 +17,6 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 const prisma = new PrismaClient();
 const app = express();
 
-// Store for device authorization codes (in production, use Redis or database)
-const deviceCodes = new Map();
-
 app.use(
   cors({
     origin: true,
@@ -37,43 +34,100 @@ const workos = new WorkOS(API_KEY, {
 });
 
 async function withAuth(req, res, next) {
-  const session = workos.userManagement.loadSealedSession({
-    sessionData: req.cookies["wos-session"],
-    cookiePassword: WORKOS_COOKIE_PASSWORD,
-  });
+  // Check for sealed session in Authorization header (for CLI) or cookie (for web)
+  const authHeader = req.headers["authorization"];
+  let sessionData;
+  let isCli = false;
 
-  const { authenticated, reason } = await session.authenticate();
+  console.log("[withAuth] Authorization header:", authHeader);
 
-  if (authenticated) {
-    return next();
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    // CLI authentication with sealed session token
+    sessionData = authHeader.replace("Bearer ", "");
+    isCli = true;
+    console.log("[withAuth] CLI request detected. Using Authorization header.");
+  } else {
+    // Web authentication with cookie
+    sessionData = req.cookies["wos-session"];
+    console.log("[withAuth] Web request detected. Using wos-session cookie.");
   }
 
-  // If the cookie is missing, redirect to login
-  if (!authenticated && reason === "no_session_cookie_provided") {
+  if (!sessionData) {
+    console.warn("[withAuth] No session data found.");
+    if (isCli) {
+      return res.status(401).json({ error: "No authorization token provided" });
+    }
     return res.redirect("/login");
   }
 
-  // If the session is invalid, attempt to refresh
-  try {
-    const { authenticated, sealedSession } = await session.refresh();
+  console.log("[withAuth] Loading sealed session...");
+  const session = workos.userManagement.loadSealedSession({
+    sessionData,
+    cookiePassword: WORKOS_COOKIE_PASSWORD,
+  });
 
-    if (!authenticated) {
+  try {
+    const { authenticated, reason, user } = await session.authenticate();
+    console.log(`[withAuth] Session authenticated: ${authenticated}`, reason);
+
+    if (authenticated) {
+      // Store session and user in request for use in route handlers
+      req.session = session;
+      req.user = user;
+      console.log(`[withAuth] User stored in request: ${user?.id}`);
+      return next();
+    }
+
+    // Session not authenticated, attempt to refresh for both CLI and web
+    console.log("[withAuth] Attempting to refresh session...");
+    const {
+      authenticated: refreshed,
+      sealedSession,
+      user: refreshedUser,
+    } = await session.refresh();
+
+    if (!refreshed) {
+      console.warn("[withAuth] Session refresh failed.");
+      if (isCli) {
+        return res
+          .status(401)
+          .json({ error: "Session expired. Please login again.", reason });
+      }
       return res.redirect("/login");
     }
 
-    // update the cookie
-    res.cookie("wos-session", sealedSession, {
-      path: "/",
-      httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-    });
+    console.log(
+      `[withAuth] Session refreshed successfully for user: ${refreshedUser?.id}`
+    );
 
-    // Redirect to the same route to ensure the updated cookie is used
-    return res.redirect(req.originalUrl);
+    // Store refreshed session and user in request
+    req.session = session;
+    req.user = refreshedUser;
+
+    if (isCli) {
+      // For CLI, send new sealed session token in response header
+      res.setHeader("X-New-Session-Token", sealedSession);
+      console.log(
+        "[withAuth] New session token set in X-New-Session-Token header"
+      );
+      return next();
+    } else {
+      // For web, update the cookie
+      res.cookie("wos-session", sealedSession, {
+        path: "/",
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+      });
+
+      // Redirect to the same route to ensure the updated cookie is used
+      console.log("[withAuth] Session refreshed. Redirecting to original URL.");
+      return res.redirect(req.originalUrl);
+    }
   } catch (e) {
     // Failed to refresh access token, redirect user to login page
     // after deleting the cookie
+    console.error("[withAuth] Error during authentication or refresh:", e);
     res.clearCookie("wos-session");
     res.redirect("/login");
   }
@@ -141,29 +195,22 @@ app.get("/callback", async (req, res) => {
   }
 });
 
-app.get("/logout", async (req, res) => {
-  const session = workos.userManagement.loadSealedSession({
-    sessionData: req.cookies["wos-session"],
-    cookiePassword: WORKOS_COOKIE_PASSWORD,
-  });
+app.get("/logout", withAuth, async (req, res) => {
+  const session = req.session;
 
   const url = await session.getLogoutUrl();
+
+  console.log("[/logout] Logging out user and redirecting to:", url);
 
   res.clearCookie("wos-session");
   res.redirect(url);
 });
 
 app.get("/user", withAuth, async (req, res) => {
-  const session = workos.userManagement.loadSealedSession({
-    sessionData: req.cookies["wos-session"],
-    cookiePassword: WORKOS_COOKIE_PASSWORD,
-  });
+  // User is already authenticated and stored in req.user by withAuth middleware
+  const user = req.user;
 
-  const { user } = await session.authenticate();
-
-  console.log(`User ${user.firstName} is logged in`);
-
-  // ... render dashboard page
+  console.log(`[/user] User ${user.firstName} is logged in`);
 
   res.json({ user });
 });
@@ -171,12 +218,8 @@ app.get("/user", withAuth, async (req, res) => {
 // GET favorite color - authenticated endpoint
 app.get("/favorite-color", withAuth, async (req, res) => {
   try {
-    const session = workos.userManagement.loadSealedSession({
-      sessionData: req.cookies["wos-session"],
-      cookiePassword: WORKOS_COOKIE_PASSWORD,
-    });
-
-    const { user } = await session.authenticate();
+    // User is already authenticated and stored in req.user by withAuth middleware
+    const user = req.user;
 
     // Find or create user in database
     let dbUser = await prisma.user.findUnique({
@@ -203,14 +246,10 @@ app.get("/favorite-color", withAuth, async (req, res) => {
 });
 
 // POST favorite color - authenticated endpoint
-app.post("/favorite-color", withAuth, express.json(), async (req, res) => {
+app.post("/favorite-color", withAuth, async (req, res) => {
   try {
-    const session = workos.userManagement.loadSealedSession({
-      sessionData: req.cookies["wos-session"],
-      cookiePassword: WORKOS_COOKIE_PASSWORD,
-    });
-
-    const { user } = await session.authenticate();
+    // User is already authenticated and stored in req.user by withAuth middleware
+    const user = req.user;
     const { favoriteColor } = req.body;
 
     if (!favoriteColor || typeof favoriteColor !== "string") {
@@ -241,616 +280,49 @@ app.post("/favorite-color", withAuth, express.json(), async (req, res) => {
   }
 });
 
-// ========================================
-// CLI Authentication Endpoints
-// ========================================
-
-// Helper function to generate random codes
-function generateCode(length) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let result = "";
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
-
-// Helper function to generate secure token
-function generateToken() {
-  return require("crypto").randomBytes(32).toString("hex");
-}
-
-// Middleware to verify CLI bearer token
-async function withCliAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({
-      error: "Unauthorized",
-      message: "No authentication token provided"
-    });
-  }
-
-  const token = authHeader.substring(7);
-
-  // Find device code with this token and check expiration
-  let userWorkosId = null;
-  let isExpired = false;
-
-  for (const [deviceCode, data] of deviceCodes.entries()) {
-    if (data.token === token && data.status === "authorized") {
-      // Check if token expired
-      if (data.expiresAt && Date.now() > data.expiresAt) {
-        isExpired = true;
-        deviceCodes.delete(deviceCode); // Clean up expired token
-        break;
-      }
-
-      userWorkosId = data.workosId;
-      break;
-    }
-  }
-
-  if (isExpired) {
-    return res.status(401).json({
-      error: "Token expired",
-      message: "Your session has expired. Please run 'pulse login' again."
-    });
-  }
-
-  if (!userWorkosId) {
-    return res.status(401).json({
-      error: "Invalid token",
-      message: "Invalid or expired token. Please run 'pulse login' again."
-    });
-  }
-
-  req.userWorkosId = userWorkosId;
-  next();
-}
-
-// Initiate device authorization
-app.post("/cli/auth/device", (req, res) => {
-  const deviceCode = generateCode(32);
-  const userCode = generateCode(6);
-  const verificationUrl = `${BACKEND_URL}/cli/auth/verify`; // No user code in URL!
-
-  deviceCodes.set(deviceCode, {
-    userCode,
-    deviceCode,
-    status: "pending",
-    createdAt: Date.now(),
-  });
-
-  // Clean up expired codes (older than 10 minutes)
-  const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
-  for (const [code, data] of deviceCodes.entries()) {
-    if (data.createdAt < tenMinutesAgo) {
-      deviceCodes.delete(code);
-    }
-  }
-
-  res.json({
-    deviceCode,
-    userCode,
-    verificationUrl,
-    expiresIn: 600, // 10 minutes
-    interval: 5, // Poll every 5 seconds
-  });
-});
-
-// Verification page for CLI auth - Shows form to enter code
-app.get("/cli/auth/verify", (req, res) => {
-  // Show a page where user manually enters the code
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Verify Your Device - Pulse CLI</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-          * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-          }
-          body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
-          }
-          .container {
-            background: white;
-            padding: 3rem;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 500px;
-            width: 100%;
-            text-align: center;
-          }
-          .logo {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-          }
-          h1 {
-            color: #333;
-            margin-bottom: 1rem;
-            font-size: 1.8rem;
-          }
-          .subtitle {
-            color: #666;
-            margin-bottom: 2rem;
-            line-height: 1.6;
-          }
-          .code-input {
-            width: 100%;
-            padding: 1rem;
-            font-size: 1.5rem;
-            text-align: center;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            text-transform: uppercase;
-            letter-spacing: 0.5rem;
-            font-weight: bold;
-            margin-bottom: 1.5rem;
-            transition: border-color 0.3s;
-          }
-          .code-input:focus {
-            outline: none;
-            border-color: #667eea;
-          }
-          .submit-btn {
-            width: 100%;
-            padding: 1rem;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-          }
-          .submit-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-          }
-          .submit-btn:active {
-            transform: translateY(0);
-          }
-          .submit-btn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-          }
-          .error {
-            color: #e74c3c;
-            margin-top: 1rem;
-            display: none;
-          }
-          .error.show {
-            display: block;
-          }
-          .instructions {
-            background: #f8f9fa;
-            padding: 1.5rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
-            text-align: left;
-          }
-          .instructions h3 {
-            color: #333;
-            font-size: 1rem;
-            margin-bottom: 0.5rem;
-          }
-          .instructions ol {
-            margin-left: 1.5rem;
-            color: #666;
-            line-height: 1.8;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="logo">🔐</div>
-          <h1>Authorize Pulse CLI</h1>
-          <p class="subtitle">
-            To continue, please enter the verification code displayed in your terminal.
-          </p>
-
-          <div class="instructions">
-            <h3>📋 Instructions:</h3>
-            <ol>
-              <li>Look at your terminal window</li>
-              <li>Find the 6-character code</li>
-              <li>Enter it below</li>
-              <li>Click "Continue to Sign In"</li>
-            </ol>
-          </div>
-
-          <form id="verifyForm">
-            <input
-              type="text"
-              id="userCode"
-              class="code-input"
-              placeholder="XXXXXX"
-              maxlength="6"
-              pattern="[A-Z0-9]{6}"
-              required
-              autocomplete="off"
-              autofocus
-            />
-            <button type="submit" class="submit-btn" id="submitBtn">
-              Continue to Sign In →
-            </button>
-            <div class="error" id="error">Invalid code. Please check your terminal and try again.</div>
-          </form>
-        </div>
-
-        <script>
-          const form = document.getElementById('verifyForm');
-          const input = document.getElementById('userCode');
-          const submitBtn = document.getElementById('submitBtn');
-          const error = document.getElementById('error');
-
-          // Auto-uppercase and format input
-          input.addEventListener('input', (e) => {
-            e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-            error.classList.remove('show');
-          });
-
-          form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const userCode = input.value.trim();
-
-            if (userCode.length !== 6) {
-              error.textContent = 'Code must be exactly 6 characters';
-              error.classList.add('show');
-              return;
-            }
-
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Verifying...';
-
-            try {
-              // Verify the code exists
-              const response = await fetch('/cli/auth/verify-code', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userCode })
-              });
-
-              if (!response.ok) {
-                throw new Error('Invalid code');
-              }
-
-              // Code is valid, redirect to WorkOS auth
-              window.location.href = '/cli/auth/start-auth?user_code=' + userCode;
-            } catch (err) {
-              error.textContent = 'Invalid code. Please check your terminal and try again.';
-              error.classList.add('show');
-              submitBtn.disabled = false;
-              submitBtn.textContent = 'Continue to Sign In →';
-            }
-          });
-        </script>
-      </body>
-    </html>
-  `);
-});
-
-// Verify that user code exists and is valid
-app.post("/cli/auth/verify-code", express.json(), (req, res) => {
-  const { userCode } = req.body;
-
-  if (!userCode) {
-    return res.status(400).json({ error: "Missing userCode" });
-  }
-
-  // Check if this user code exists and is pending
-  let isValid = false;
-  for (const [deviceCode, data] of deviceCodes.entries()) {
-    if (data.userCode === userCode && data.status === "pending") {
-      isValid = true;
-      break;
-    }
-  }
-
-  if (!isValid) {
-    return res.status(400).json({ error: "Invalid or expired code" });
-  }
-
-  res.json({ valid: true });
-});
-
-// Start the WorkOS authentication flow after code verification
-app.get("/cli/auth/start-auth", (req, res) => {
-  const userCode = req.query.user_code;
-
-  if (!userCode) {
-    return res.status(400).send("Missing user_code parameter");
-  }
-
-  // Verify code still exists
-  let isValid = false;
-  for (const [deviceCode, data] of deviceCodes.entries()) {
-    if (data.userCode === userCode && data.status === "pending") {
-      isValid = true;
-      break;
-    }
-  }
-
-  if (!isValid) {
-    return res.status(400).send("Invalid or expired code");
-  }
-
-  // Redirect to WorkOS login with state containing user code
-  const authorizationUrl = workos.userManagement.getAuthorizationUrl({
-    provider: "authkit",
-    redirectUri: `${BACKEND_URL}/cli/auth/callback`,
-    clientId: CLIENT_ID,
-    state: userCode,
-  });
-
-  res.redirect(authorizationUrl);
-});
-
-// CLI auth callback
-app.get("/cli/auth/callback", async (req, res) => {
-  const code = req.query.code;
-  const userCode = req.query.state;
-
-  console.log("[/cli/auth/callback] Received callback with code:", code);
-  console.log("[/cli/auth/callback] User code:", userCode);
-
-  if (!code || !userCode) {
-    console.error("[/cli/auth/callback] Missing code or user_code");
-    return res.status(400).send("Missing required parameters");
-  }
-
+// CLI Authentication - Exchange refresh token for sealed session
+app.post("/cli/auth/session", async (req, res) => {
   try {
-    // Authenticate with WorkOS
-    console.log("[/cli/auth/callback] Authenticating with WorkOS...");
-    const authenticateResponse =
-      await workos.userManagement.authenticateWithCode({
-        clientId: CLIENT_ID,
-        code,
-      });
+    const { refreshToken } = req.body;
 
-    const { user } = authenticateResponse;
-    console.log("[/cli/auth/callback] Authentication successful for user:", user?.id);
-
-    // Find the device code with this user code
-    let foundDeviceCode = null;
-    for (const [deviceCode, data] of deviceCodes.entries()) {
-      if (data.userCode === userCode && data.status === "pending") {
-        foundDeviceCode = deviceCode;
-        break;
-      }
+    if (!refreshToken) {
+      return res.status(400).json({ error: "refreshToken is required" });
     }
 
-    if (!foundDeviceCode) {
-      console.error("[/cli/auth/callback] Device code not found for user code:", userCode);
-      return res.status(400).send("Invalid or expired user code");
-    }
+    console.log("[/cli/auth/session] Authenticating with refresh token...");
 
-    // Generate access token and update device code status
-    const token = generateToken();
-    const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days from now
-
-    const deviceData = deviceCodes.get(foundDeviceCode);
-    deviceData.status = "authorized";
-    deviceData.token = token;
-    deviceData.workosId = user.id;
-    deviceData.expiresAt = expiresAt; // Add expiration timestamp
-    deviceCodes.set(foundDeviceCode, deviceData);
-
-    console.log("[/cli/auth/callback] Device authorized successfully");
-
-    // Show success page
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Authentication Successful</title>
-          <style>
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              height: 100vh;
-              margin: 0;
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            }
-            .container {
-              background: white;
-              padding: 3rem;
-              border-radius: 12px;
-              box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-              text-align: center;
-              max-width: 500px;
-            }
-            h1 {
-              color: #667eea;
-              margin-bottom: 1rem;
-            }
-            p {
-              color: #666;
-              line-height: 1.6;
-            }
-            .success-icon {
-              font-size: 4rem;
-              margin-bottom: 1rem;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="success-icon">✓</div>
-            <h1>Authentication Successful!</h1>
-            <p>You have successfully authenticated Pulse CLI.</p>
-            <p><strong>You can now close this window and return to your terminal.</strong></p>
-          </div>
-        </body>
-      </html>
-    `);
-  } catch (error) {
-    console.error("[/cli/auth/callback] Authentication failed:", error);
-    res.status(500).send("Authentication failed");
-  }
-});
-
-// Poll for token
-app.post("/cli/auth/token", express.json(), (req, res) => {
-  const { deviceCode } = req.body;
-
-  if (!deviceCode) {
-    return res.status(400).json({ error: "Missing deviceCode" });
-  }
-
-  const deviceData = deviceCodes.get(deviceCode);
-
-  if (!deviceData) {
-    return res.status(400).json({ error: "Invalid device code" });
-  }
-
-  if (deviceData.status === "pending") {
-    return res.status(428).json({ error: "Authorization pending" });
-  }
-
-  if (deviceData.status === "authorized") {
-    return res.json({
-      token: deviceData.token,
-      expiresAt: deviceData.expiresAt
-    });
-  }
-
-  return res.status(400).json({ error: "Invalid device code status" });
-});
-
-// Validate CLI token
-app.get("/cli/auth/validate", async (req, res) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ valid: false, error: "No token provided" });
-  }
-
-  const token = authHeader.substring(7);
-
-  // Check if token exists and is valid
-  let isValid = false;
-  let userWorkosId = null;
-  let expiresAt = null;
-
-  for (const [deviceCode, data] of deviceCodes.entries()) {
-    if (data.token === token && data.status === "authorized") {
-      // Check if token expired
-      if (data.expiresAt && Date.now() > data.expiresAt) {
-        // Token expired, clean it up
-        deviceCodes.delete(deviceCode);
-        return res.status(401).json({
-          valid: false,
-          error: "Token expired",
-          message: "Your session has expired. Please run 'pulse login' again."
-        });
-      }
-
-      isValid = true;
-      userWorkosId = data.workosId;
-      expiresAt = data.expiresAt;
-      break;
-    }
-  }
-
-  if (!isValid) {
-    return res.status(401).json({ valid: false, error: "Invalid or expired token" });
-  }
-
-  // Check if user still exists in database
-  try {
-    const user = await prisma.user.findUnique({
-      where: { workosId: userWorkosId },
+    // Authenticate with refresh token and seal the session
+    const {
+      sealedSession,
+      user,
+      refreshToken: newRefreshToken,
+    } = await workos.userManagement.authenticateWithRefreshToken({
+      clientId: CLIENT_ID,
+      refreshToken,
+      session: {
+        sealSession: true,
+        cookiePassword: WORKOS_COOKIE_PASSWORD,
+      },
     });
 
-    if (!user) {
-      return res.status(401).json({ valid: false, error: "User not found" });
-    }
-
-    const now = Date.now();
-    const timeUntilExpiry = expiresAt - now;
-    const daysUntilExpiry = Math.floor(timeUntilExpiry / (24 * 60 * 60 * 1000));
+    console.log(
+      "[/cli/auth/session] Session sealed successfully for user:",
+      user?.id
+    );
 
     res.json({
-      valid: true,
-      userId: userWorkosId,
-      email: user.email,
-      firstName: user.firstName,
-      expiresAt: expiresAt,
-      expiresIn: timeUntilExpiry,
-      expiresInDays: daysUntilExpiry
+      sessionToken: sealedSession,
+      refreshToken: newRefreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+      },
     });
   } catch (error) {
-    console.error("[/cli/auth/validate] Error:", error);
-    res.status(500).json({ valid: false, error: "Validation failed" });
-  }
-});
-
-// CLI Get favorite color
-app.get("/cli/favorite-color", withCliAuth, async (req, res) => {
-  try {
-    const workosId = req.userWorkosId;
-
-    // Find or create user in database
-    let dbUser = await prisma.user.findUnique({
-      where: { workosId },
-    });
-
-    if (!dbUser) {
-      return res.json({ favoriteColor: null });
-    }
-
-    res.json({ favoriteColor: dbUser.favoriteColor });
-  } catch (error) {
-    console.error("[/cli/favorite-color GET] Error:", error);
-    res.status(500).json({ error: "Failed to fetch favorite color" });
-  }
-});
-
-// CLI Set favorite color
-app.post("/cli/favorite-color", withCliAuth, express.json(), async (req, res) => {
-  try {
-    const workosId = req.userWorkosId;
-    const { favoriteColor } = req.body;
-
-    if (!favoriteColor || typeof favoriteColor !== "string") {
-      return res.status(400).json({ error: "favoriteColor is required" });
-    }
-
-    // Find user first to get email
-    const existingUser = await prisma.user.findUnique({
-      where: { workosId },
-    });
-
-    if (!existingUser) {
-      return res.status(404).json({ error: "User not found. Please authenticate via web first." });
-    }
-
-    // Update user with favorite color
-    const dbUser = await prisma.user.update({
-      where: { workosId },
-      data: { favoriteColor },
-    });
-
-    res.json({ favoriteColor: dbUser.favoriteColor });
-  } catch (error) {
-    console.error("[/cli/favorite-color POST] Error:", error);
-    res.status(500).json({ error: "Failed to update favorite color" });
+    console.error("[/cli/auth/session] Error:", error);
+    res.status(401).json({ error: "Failed to create session" });
   }
 });
 
