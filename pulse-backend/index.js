@@ -6,9 +6,9 @@ const { WorkOS } = require("@workos-inc/node");
 const { PrismaClient } = require("./generated/prisma");
 
 // Environment variables
-const CLIENT_ID = process.env.WORKOS_CLIENT_ID || "client_01KA32XKNNQ65WTEB00XYTZG8W";
-const API_KEY = process.env.WORKOS_API_KEY || "sk_test_a2V5XzAxS0EzMlhLMUFTSFlOMjRTRVA4Wlk2OE04LHhLMG9IckdzZ1FHUFlyQVdPemF1ZHBOODM";
-const WORKOS_COOKIE_PASSWORD = process.env.WORKOS_COOKIE_PASSWORD || "1Oj0cO7NKnEDom664iXm8IvGWqWbAm4T";
+const CLIENT_ID = process.env.WORKOS_CLIENT_ID || "";
+const API_KEY = process.env.WORKOS_API_KEY || "";
+const WORKOS_COOKIE_PASSWORD = process.env.WORKOS_COOKIE_PASSWORD || "";
 
 // URLs
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3000";
