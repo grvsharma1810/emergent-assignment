@@ -5,10 +5,14 @@ const cors = require("cors");
 const { WorkOS } = require("@workos-inc/node");
 const { PrismaClient } = require("./generated/prisma");
 
-const CLIENT_ID = "client_01KA32XKNNQ65WTEB00XYTZG8W";
-const API_KEY =
-  "sk_test_a2V5XzAxS0EzMlhLMUFTSFlOMjRTRVA4Wlk2OE04LHhLMG9IckdzZ1FHUFlyQVdPemF1ZHBOODM";
-const WORKOS_COOKIE_PASSWORD = "1Oj0cO7NKnEDom664iXm8IvGWqWbAm4T";
+// Environment variables
+const CLIENT_ID = process.env.WORKOS_CLIENT_ID || "client_01KA32XKNNQ65WTEB00XYTZG8W";
+const API_KEY = process.env.WORKOS_API_KEY || "sk_test_a2V5XzAxS0EzMlhLMUFTSFlOMjRTRVA4Wlk2OE04LHhLMG9IckdzZ1FHUFlyQVdPemF1ZHBOODM";
+const WORKOS_COOKIE_PASSWORD = process.env.WORKOS_COOKIE_PASSWORD || "1Oj0cO7NKnEDom664iXm8IvGWqWbAm4T";
+
+// URLs
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:3000";
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 const prisma = new PrismaClient();
 const app = express();
@@ -16,10 +20,9 @@ const app = express();
 // Store for device authorization codes (in production, use Redis or database)
 const deviceCodes = new Map();
 
-// CORS configuration
 app.use(
   cors({
-    origin: true, // Allow all origins
+    origin: true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -84,7 +87,7 @@ app.get("/login", (req, res) => {
     provider: "authkit",
 
     // The callback endpoint that WorkOS will redirect to after a user authenticates
-    redirectUri: "http://localhost:3000/callback",
+    redirectUri: `${BACKEND_URL}/callback`,
     clientId: CLIENT_ID,
   });
 
@@ -130,8 +133,8 @@ app.get("/callback", async (req, res) => {
     // Use the information in `user` for further business logic.
 
     // Redirect the user to the homepage
-    console.log("[/callback] Redirecting user to /");
-    return res.redirect("http://localhost:5173/dashboard");
+    console.log("[/callback] Redirecting user to frontend dashboard");
+    return res.redirect(`${FRONTEND_URL}/dashboard`);
   } catch (error) {
     console.error("[/callback] Authentication failed:", error);
     return res.redirect("/login");
@@ -310,7 +313,7 @@ async function withCliAuth(req, res, next) {
 app.post("/cli/auth/device", (req, res) => {
   const deviceCode = generateCode(32);
   const userCode = generateCode(6);
-  const verificationUrl = `http://localhost:3000/cli/auth/verify`; // No user code in URL!
+  const verificationUrl = `${BACKEND_URL}/cli/auth/verify`; // No user code in URL!
 
   deviceCodes.set(deviceCode, {
     userCode,
@@ -588,7 +591,7 @@ app.get("/cli/auth/start-auth", (req, res) => {
   // Redirect to WorkOS login with state containing user code
   const authorizationUrl = workos.userManagement.getAuthorizationUrl({
     provider: "authkit",
-    redirectUri: "http://localhost:3000/cli/auth/callback",
+    redirectUri: `${BACKEND_URL}/cli/auth/callback`,
     clientId: CLIENT_ID,
     state: userCode,
   });
