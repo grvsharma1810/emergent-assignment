@@ -1,4 +1,4 @@
-const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const BACKEND_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 export const AppV2 = () => {
   const handleSignIn = () => {
@@ -11,8 +11,7 @@ export const AppV2 = () => {
 
   return (
     <div className="App">
-      <h1>AuthKit example</h1>
-      <p>This is an example of how to use AuthKit with a React frontend.</p>
+      <h1>Pulse 🔥</h1>
       <p>
         <button onClick={handleSignIn}>Sign in</button>
       </p>
