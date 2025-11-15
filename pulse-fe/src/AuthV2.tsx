@@ -12,6 +12,7 @@ export const AppV2 = () => {
   return (
     <div className="App">
       <h1>Pulse 🔥</h1>
+      <p>Welcome to Matrix</p>
       <p>
         <button onClick={handleSignIn}>Sign in</button>
       </p>
