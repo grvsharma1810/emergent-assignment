@@ -14,6 +14,8 @@ RUN npm install --omit=dev
 COPY . .
 
 # Generate Prisma client
+# Set a dummy DATABASE_URL for build time (actual URL comes from docker-compose)
+ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy?schema=public"
 RUN npx prisma generate
 
 # Production stage
