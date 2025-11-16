@@ -58,8 +58,8 @@ async function loginCommand() {
 
       pollSpinner.text = "Exchanging tokens for session...";
 
-      // Step 4: Exchange refresh token for sealed session from backend
-      const sessionData = await exchangeForSession(result.refresh_token);
+      // Step 4: Exchange tokens for sealed session from backend (authenticated)
+      const sessionData = await exchangeForSession(result);
 
       console.log(chalk.dim("\nSession Data:"), sessionData);
 

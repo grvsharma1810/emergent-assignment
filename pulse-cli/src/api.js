@@ -150,15 +150,18 @@ async function pollForToken({ deviceCode, expiresIn = 300, interval = 5 }) {
   }
 }
 
-// Exchange refresh token for sealed session
-async function exchangeForSession(refreshToken) {
+// Exchange tokens for sealed session (authenticated endpoint)
+async function exchangeForSession(tokensFromWorkOS) {
   try {
     const response = await fetch(`${BACKEND_URL}/cli/auth/session`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Authorization": `Bearer ${tokensFromWorkOS.access_token}`, // Authenticate the request
       },
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({
+        refreshToken: tokensFromWorkOS.refresh_token // Use to create sealed session
+      }),
     });
 
     if (!response.ok) {

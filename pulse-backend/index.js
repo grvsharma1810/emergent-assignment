@@ -33,6 +33,42 @@ const workos = new WorkOS(API_KEY, {
   clientId: CLIENT_ID,
 });
 
+// Middleware for WorkOS access token authentication (for initial CLI session creation)
+async function withWorkOSAccessToken(req, res, next) {
+  const authHeader = req.headers["authorization"];
+
+  console.log("[withWorkOSAccessToken] Authorization header:", authHeader);
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.warn("[withWorkOSAccessToken] No Bearer token provided");
+    return res.status(401).json({ error: "No authorization token provided" });
+  }
+
+  const accessToken = authHeader.replace("Bearer ", "");
+
+  try {
+    // Verify access token with WorkOS by fetching user info
+    console.log("[withWorkOSAccessToken] Verifying access token with WorkOS...");
+
+    const user = await workos.userManagement.getUser({
+      accessToken,
+    });
+
+    console.log(`[withWorkOSAccessToken] Token verified for user: ${user?.id}`);
+
+    // Store user in request for downstream handlers
+    req.user = user;
+    req.accessToken = accessToken;
+    return next();
+  } catch (error) {
+    console.error("[withWorkOSAccessToken] Token verification failed:", error);
+    return res.status(401).json({
+      error: "Invalid or expired access token",
+      message: error.message
+    });
+  }
+}
+
 async function withAuth(req, res, next) {
   // Check for sealed session in Authorization header (for CLI) or cookie (for web)
   const authHeader = req.headers["authorization"];
@@ -280,18 +316,22 @@ app.post("/favorite-color", withAuth, async (req, res) => {
   }
 });
 
-// CLI Authentication - Exchange refresh token for sealed session
-app.post("/cli/auth/session", async (req, res) => {
+// CLI Authentication - Exchange refresh token for sealed session (AUTHENTICATED ROUTE)
+app.post("/cli/auth/session", withWorkOSAccessToken, async (req, res) => {
   try {
     const { refreshToken } = req.body;
+    const authenticatedUser = req.user; // Already verified via access token
 
     if (!refreshToken) {
       return res.status(400).json({ error: "refreshToken is required" });
     }
 
-    console.log("[/cli/auth/session] Authenticating with refresh token...");
+    console.log("[/cli/auth/session] User verified via access token:", authenticatedUser.id);
+    console.log("[/cli/auth/session] Creating sealed session with refresh token...");
 
-    // Authenticate with refresh token and seal the session
+    // Now we trust the refresh token because:
+    // 1. The access token was verified with WorkOS
+    // 2. The refresh token should belong to the same user
     const {
       sealedSession,
       user,
@@ -305,9 +345,17 @@ app.post("/cli/auth/session", async (req, res) => {
       },
     });
 
+    // Verify the refresh token belongs to the authenticated user
+    if (user.id !== authenticatedUser.id) {
+      console.error("[/cli/auth/session] User ID mismatch!");
+      return res.status(403).json({
+        error: "Refresh token does not match authenticated user"
+      });
+    }
+
     console.log(
       "[/cli/auth/session] Session sealed successfully for user:",
-      user?.id
+      user.id
     );
 
     res.json({
